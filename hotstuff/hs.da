@@ -1,0 +1,306 @@
+# WRITE PSEUDOCODE
+"""
+copied from paper, except:
+  replaced latex to use ascii <-, |>, <, >, and, or, in, -, '', ', big(
+  added _ before subscript
+
+Algorithm 1 Utilities (for replica r).
+ 1: function Msg(type, node, qc)
+ 2:   m.type <- type
+ 3:   m.viewNumber <- curView
+ 4:   m.node <- node
+ 5:   m.justify <- qc
+ 6: return m
+ 7: function voteMsg(type, node, qc)
+ 8:   m <- Msg(type, node, qc)
+ 9:   m.partialSig <- tsign_r (<m.type, m.viewNumber, m.node>)
+10: return m
+11: procedure createLeaf(parent, cmd)
+12:   b.parent <- parent
+13:   b.cmd <- cmd
+14: return b
+15: function QC(V)
+16:   qc.type <- m.type : m in V
+17:   qc.viewNumber <- m.viewNumber : m in V
+18:   qc.node <- m.node : m in V
+19:   qc.sig <- tcombine(<qc.type, qc.viewNumber, qc.node>,
+      	     		{m.partialSig | m in V })
+20: return qc
+21: function matchingMsg(m, t, v)
+22:   return (m.type = t) and (m.viewNumber = v)
+23: function matchingQC(qc, t, v)
+24:   return (qc.type = t) and (qc.viewNumber = v)
+25: function safeNode(node, qc)
+26:   return (node extends from lockedQC.node) or // safety rule
+27:  (qc.viewNumber > lockedQC.viewNumber) // liveness rule
+
+Algorithm 2 Basic HotStuff protocol (for replica r).
+ 1: for curView <- 1, 2, 3, . . . do
+    |> prepare phase
+ 2:   as a leader // r = leader(curView)
+      // we assume special new-view messages from view 0
+ 3:     wait for (n - f ) new-view messages:
+             M <- {m | matchingMsg(m, new-view, curView-1)}
+ 4:     highQC <-
+        (
+        argmax
+        m in M
+        {m.justify.viewNumber}
+        )
+        .justify
+ 5:     curProposal <- createLeaf(highQC.node,
+                                  client's command)
+ 6:     broadcast Msg(prepare, curProposal, highQC)
+ 7: as a replica
+ 8:   wait for message m from leader(curView)
+           m : matchingMsg(m, prepare, curView)
+ 9:   if m.node extends from m.justify.node and
+                safeNode(m.node, m.justify) then
+10:    send voteMsg(prepare, m.node, bot) to leader(curView)
+    |> pre-commit phase
+11:   as a leader
+12:     wait for (n - f ) votes:
+	     V <- {v | matchingMsg(v, prepare, curView)}
+13:     prepareQC <- QC(V)
+14:     broadcast Msg(pre-commit, bot, prepareQC)
+15:   as a replica
+16:     wait for message m from leader(curView)
+	     m : matchingQC(m.justify, prepare, curView)
+17:     prepareQC <- m.justify
+18:     send to leader(curView)
+	     voteMsg(pre-commit, m.justify.node, bot)
+    |> commit phase
+19:   as a leader
+20:     wait for (n - f ) votes:
+             V <- {v | matchingMsg(v, pre-commit, curView)}
+21:     precommitQC <- QC(V)
+22:     broadcast Msg(commit, bot, precommitQC)
+23:   as a replica
+24:     wait for message m from leader(curView)
+             m : matchingQC(m.justify, pre-commit, curView)
+25:     lockedQC <- m.justify
+26:     send to leader(curView)
+             voteMsg(commit, m.justify.node, bot)
+    |> decide phase
+27: as a leader
+28:   wait for (n - f ) votes:
+      	 V <- {v | matchingMsg(v, commit, curView)}
+29:   commitQC <- QC(V)
+30:   broadcast Msg(decide, bot, commitQC)
+31: as a replica
+32:   wait for message m from leader(curView)
+      	   m : matchingQC(m.justify, commit, curView)
+33:   execute new commands through m.justify.node,
+      respond to clients
+    |> Finally
+34:   nextView interrupt: goto this line if nextView(curView) is
+      called during "wait for" in any phase
+35:   send Msg(new-view, bot, prepareQC) to leader(curView + 1)
+"""
+import threading
+from random import randint
+import logging
+from hs_type import Node, create_leaf
+
+# [Not] Genesis Block
+GENESIS = Node(None, None, hash(0))
+TIMEOUT = 5
+
+def matchingQC(mtype, viewNum, qc):
+    return qc[0] == mtype and qc[1] == viewNum
+
+# Combine partial signatures into QC = (mtype, mview, mnode, m)
+def combine_signature():
+    return "dummy_signature"
+
+class Replica(process):
+    def setup(peers):
+        self.curView = 0
+        self.setup = False
+        self.head = GENESIS
+        self.timeout = TIMEOUT
+        
+        self.n = len(peers)
+        self.f = (n - 1)/3
+
+        self.pid = 0
+        self.roll = randint(0, 1000 * n)
+
+        # Backup non-volatile state
+        self.lockedQC = None
+        self.prepareQC = None
+
+    def is_curr_leader():
+        return (self.curView % n) == self.pid
+    
+    def is_next_leader():
+        return ((self.curView + 1) % n) == self.pid
+
+    def anyof(s):
+        return next(iter(s)) if s else None
+
+    def start_leader():
+        await(len(setof(p, received(('new_view',curView,_,_,_), from_=p))) >= n - f)
+
+        # issue here, set is empty
+        set_of_qc = setof(('prepare', viewNum, qc, sig), received(('new_view', curView, _, ('prepare', viewNum, qc, sig), _), from_ = peers))
+        
+        set_of_view = setof(viewNum2, received(('new_view', curView, _, ('prepare', viewNum2, _, _), _), from_ = peers))
+        
+        output("received qc = " + str(set_of_view) + " from view number " + str(curView))
+
+        highQC = None
+
+        if len(set_of_qc) > 0:
+            highQC = anyof(setof(
+                ('prepare', viewNum, qc, sig),
+                received(('new_view', curView, _, ('prepare', viewNum, qc, sig), _)),
+                viewNum == max(set_of_view))
+                )
+        
+        highQC_node = DUMMY_NODE if highQC is None else highQC[2]
+        cur_proposal = create_leaf(highQC_node, randint(0, 10))
+        
+        output("sending prepare")
+        send(('prepare', self.curView, cur_proposal, highQC, None), to = peers)
+        -- precommit
+        await(len(setof(p,received(('prepare-ack', self.curView, cur_proposal, _, _),from_=p))) >= n-f)
+        
+        prepare_sig = combine_signature()
+        
+        output("sending precommit")
+        send(('precommit', self.curView, None, ('prepare', self.curView, cur_proposal, prepare_sig), None), to = peers)
+        -- commit
+        await(len(setof(p,received(('precommit-ack', self.curView, _, _, _),from_=p))) >= n-f)
+
+        precommit_sig = combine_signature()
+        
+        send(('commit', self.curView, None, ('precommit', self.curView, cur_proposal, precommit_sig), None), to = peers)
+        -- decide
+        await(len(setof(p,received(('commit-ack', self.curView, _, _, _),from_=p))) >= n-f)
+        commit_sig = combine_signature()
+        send(('decide', self.curView, None, ('commit', self.curView, cur_proposal, commit_sig), None), to = peers)
+        -- cleanup
+        leader_cleanup()
+
+    def leader_cleanup():
+        output("leader finished, starting new view")
+        pass
+
+    def next_view():
+        self.curView += 1
+        output("Sending new view message, view = " + str(curView))
+        send(('new_view', self.curView, None, self.prepareQC, None), to=peers)
+
+    def run():
+        if not self.setup:
+            output("process starting")
+            
+            send(("sort_processes", self.roll), to = peers)
+            await(len(setof(p, received(('sort_processes',_), from_=p))) >= n)
+            reset(received)
+            output("process Id = " + str(self.pid))
+            next_view()
+
+        while True:
+            if not self.is_curr_leader():
+                if await(some(received(('decide', view, _, _, _)),
+                            has= view==curView)):
+                    -- handle_decide
+                    output("deciding, starting new view")
+                    self.next_view()
+                elif timeout(self.timeout):
+                    output("timed out, starting new view")
+                    self.next_view()
+            else:
+                output("starting leader")
+                self.start_leader()
+                self.leader_cleanup()
+                self.next_view()
+        return
+    def safeNode(node, qc):
+        if self.lockedQC is None:
+            return True
+
+        output("qc = " + str(qc))
+        output("lock qc = " + str(self.lockedQC))
+        # (node extends from locked QC .node) OR (qc.viewNumber > locked QC .viewNumber)
+        #           safety                                     liveness
+        return node.extends(self.lockedQC[2]) or qc[1] > self.lockedQC[1]
+
+    def receive(msg = ('prepare', viewNum, node, qc, sig_), from_=l):
+        output('received prepare message')
+        if (viewNum < self.curView):
+            output("view number = " + str(viewNum) + " less than current view: " + str(self.curView))
+            return
+        # If m.node extends from m.justify.node and safeNode(m.node, m.justift)
+        if self.lockedQC is not None:
+            output('1')
+            if qc is None:
+                # locked QC is not null and qc is null so we can to ignore this
+                return
+            qc_node = qc[2]
+            if node.extends(qc_node) and safeNode(node, qc):
+                send(('prepare-ack', viewNum, node, None, self), to=l)
+            else:
+                return
+        else:
+            # It's safe to send ack since lockedQC is null
+            send(('prepare-ack', viewNum, node, None, self), to=l)
+
+    def receive(msg = ('precommit', viewNum, node, qc, sig), from_ = l):
+        output("on precommit from leader, qc = ", str(qc))
+        if viewNum >= self.curView and matchingQC('prepare', viewNum, qc):
+            self.prepareQC = qc
+            send(('precommit-ack', viewNum, node, None, self), to = l)
+
+    def receive(msg = ('commit', viewNum, node, qc, not self), from_ = l):
+        output("on commit from leader, qc = ", str(qc))
+        if viewNum >= self.curView and matchingQC('precommit', viewNum, qc):
+            self.lockedQC = qc
+            send(('commit-ack', viewNum, node, None, self), to = l)
+        else:
+            return
+    
+    def receive(msg = ('sort_processes', num), from_ = p):
+        if (num > self.roll):
+            self.pid += 1
+
+    def receive(msg = ('decide', viewNum, node, qc, sig)):
+        node_to_commit = qc[2]
+        output("committing node = ", str(node_to_commit))
+        if viewNum >= self.curView and matchingQC('commit', viewNum, qc):
+            replicate_chain(node_to_commit)
+    
+    def replicate_chain(node: Node):
+        # replicate the chain from self.head to node.
+        ## node will always extend from self.head
+        output("head = " + str(self.head))
+        output("node = " + str(node))
+        if node.extends(self.head):
+            self.execute_commands(self.head, node)
+            self.head = node
+        else:
+            ## This should never happen
+            output("Warning, something wrong has happened")
+
+
+    def execute_commands(start, finish):
+        log_stack = []
+        
+        p = finish
+        
+        while p is not None and p is not start:
+            log_stack.append(p.command)
+            p = p.parent
+        
+        while len(log_stack) > 0:
+            output(log_stack.pop())
+
+def main():
+    nReplicas = 4
+    replicas = new(Replica, num = 4)
+
+    setup(replicas, (replicas,))
+
+    start(replicas)
