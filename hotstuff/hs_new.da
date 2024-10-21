@@ -97,26 +97,6 @@ Algorithm 2 Basic HotStuff protocol (for replica r).
 35:   send Msg(new-view, bot, prepareQC) to leader(curView + 1)
 """
 
-# Paper
-class Message:
-    def __init__(self, type, viewNumber, node, qc):
-        self.type = type
-        self.viewNumber = curView
-        self.node = node
-        self.justify = qc
-
-class QC:
-    def __init__(self, type, viewNumber, node, sig):
-        self.type = type
-        self.viewNumber = viewNumber
-        self.node = node
-        self.sig = sig
-
-def matchingMsg(m, t, v):
-    return m.type == t and m.viewNumber == v
-
-def matchingQC(qc, t, v):
-    return qc.type == t and qc.viewNumber == v
 
 # MSG = (type, viewNumber, node, justify)
 # QC = (type, viewNumber, node, sig)
@@ -204,7 +184,25 @@ class Replica(process):
         # TODO: find leader
         pass
 
-    # Utility functions
+# Type definitions (from paper)
+class Message:
+    def __init__(self, type, viewNumber, node, qc):
+        self.type = type
+        self.viewNumber = curView
+        self.node = node
+        self.justify = qc
 
-    # Paper
-    def matchingQC()
+class QC:
+    def __init__(self, type, viewNumber, node, sig):
+        self.type = type
+        self.viewNumber = viewNumber
+        self.node = node
+        self.sig = sig
+
+# Utility functions (from paper)
+def matchingMsg(m, t, v):
+    return m.type == t and m.viewNumber == v
+
+def matchingQC(qc, t, v):
+    return qc.type == t and qc.viewNumber == v
+
