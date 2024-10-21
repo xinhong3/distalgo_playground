@@ -102,8 +102,17 @@ Algorithm 2 Basic HotStuff protocol (for replica r).
 # QC = (type, viewNumber, node, sig)
 
 class Replica(process):
-    def setup():
+    def setup(replicas: set, client: set):
+        
+        # [Paper] curView starts with 1
         curView = 1
+        
+        n = len(replicas)
+        f = 2 * n//3 + 1    # TODO: n >= 3f + 1, check if this is correct
+
+        replica_index = {i: add for i, add in enumerate(sorted(list(replicas)))}
+        pid = sorted(list(replicas)).index(self)
+        
         # TODO: Nextview Timeout
         pass
 
@@ -114,40 +123,45 @@ class Replica(process):
         pass
     
     def leader_role():
-        # TODO: [Define] n, f
         await(len(setof(p, received('NEW-VIEW', _curView - 1, _, _)) >= n - f))
 
         highQC = anyof(setof(
             (qc_type, qc_viewNumber, qc_node, qc_sig), 
             received(('NEW-VIEW', _curView - 1, _, (qc_type, qc_viewNumber, qc_node, qc_sig))), 
             qc_viewNumber == max(setof(qc_viewNumber1, received(('NEW-VIEW', _curView - 1, _, (_, qc_viewNumber1, _, _)))))))
-        
-        curProposal = # TODO: create proposal
+
+        curProposal = createLeaf(highQC.node, client_command) # TODO: client_command? highQC.node?
 
         # PREPARE PHASE
-        broadcast(('PREPARE', curProposal, highQC)) # TODO: Define broadcast
+        broadcast(('PREPARE', curProposal, highQC))
 
-        await(len(setof(p, received('PREPARE', _curView, _, _   )) >= n - f))
+        await(len(setof(p, received('PREPARE', _curView, _, _)) >= n - f))
         
-        prepareQC = # TODO: calculate prepare QC
+        prepareQC = QC(
+            setof(m, received(m), matchingMsg(m, 'PREPARE', curView))
+            )
 
         # COMMIT PHASE
         broadcast(('PRE-COMMIT', None, prepareQC))
 
         await(len(setof(p, received('PRE-COMMIT', _curView, _, _)) >= n - f))
         
-        precommitQC = # TODO: calculate precommit QC
+        precommitQC = QC(
+            setof(m, received(m, from_ = replicas), matchingMsg(m, 'PRE-COMMIT', curView))
+            )
         
         broadcast(('COMMIT', None, precommitQC))
 
         # DECIDE PHASE
         await(len(setof(p, received('COMMIT', _curView, _, _)) >= n - f))
         
-        commitQC = # TODO: calculate commit QC
+        commitQC = QC(
+            setof(m, received(m, from_ = replicas), matchingMsg(m, 'COMMIT', curView))
+        )
         
         broadcast(('DECIDE', None, commitQC))
 
-        nextView()  # TODO: Define nextView
+        nextView()
 
     def replica_role():
         leader_replica = get_leader(curView)
@@ -179,11 +193,20 @@ class Replica(process):
     def receive(msg = ('DECIDE', viewNumber, node, qc)):
         pass
 
-    # Find leader for current view
     def get_leader(viewNumber):
-        # TODO: find leader
-        pass
+        return replica_index[curView % n]
+    
+    # TODO: Should be useful, otherwise delete this.
+    def is_leader():
+        return pid == curView % n
 
+    def broadcast(mtype: str, node: list, qc: list):
+        output(f'Broadcast message ({mtype}, {curView}, {node}, {qc}) to replicas.')
+        send((mtype, curView, node, qc), to = replicas)
+    
+    def nextView():
+        # [Paper] goto this line if nextView(curView) is called during “wait for” in any phase
+        send(('NEW-VIEW', curView, None, prepareQC), to = get_leader(curView + 1))
 # Type definitions (from paper)
 class Message:
     def __init__(self, type, viewNumber, node, qc):
