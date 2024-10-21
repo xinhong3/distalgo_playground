@@ -1,0 +1,210 @@
+"""
+[Liu] Copied from paper, except:
+  replaced latex to use ascii <-, |>, <, >, and, or, in, -, '', ', big(
+  added _ before subscript
+
+Algorithm 1 Utilities (for replica r).
+ 1: function Msg(type, node, qc)
+ 2:   m.type <- type
+ 3:   m.viewNumber <- curView
+ 4:   m.node <- node
+ 5:   m.justify <- qc
+ 6: return m
+ 7: function voteMsg(type, node, qc)
+ 8:   m <- Msg(type, node, qc)
+ 9:   m.partialSig <- tsign_r (<m.type, m.viewNumber, m.node>)
+10: return m
+11: procedure createLeaf(parent, cmd)
+12:   b.parent <- parent
+13:   b.cmd <- cmd
+14: return b
+15: function QC(V)
+16:   qc.type <- m.type : m in V
+17:   qc.viewNumber <- m.viewNumber : m in V
+18:   qc.node <- m.node : m in V
+19:   qc.sig <- tcombine(<qc.type, qc.viewNumber, qc.node>,
+      	     		{m.partialSig | m in V })
+20: return qc
+21: function matchingMsg(m, t, v)
+22:   return (m.type = t) and (m.viewNumber = v)
+23: function matchingQC(qc, t, v)
+24:   return (qc.type = t) and (qc.viewNumber = v)
+25: function safeNode(node, qc)
+26:   return (node extends from lockedQC.node) or // safety rule
+27:  (qc.viewNumber > lockedQC.viewNumber) // liveness rule
+
+Algorithm 2 Basic HotStuff protocol (for replica r).
+ 1: for curView <- 1, 2, 3, . . . do
+    |> prepare phase
+ 2:   as a leader // r = leader(curView)
+      // we assume special new-view messages from view 0
+ 3:     wait for (n - f ) new-view messages:
+             M <- {m | matchingMsg(m, new-view, curView-1)}
+ 4:     highQC <-
+        (
+        argmax
+        m in M
+        {m.justify.viewNumber}
+        )
+        .justify
+ 5:     curProposal <- createLeaf(highQC.node,
+                                  client's command)
+ 6:     broadcast Msg(prepare, curProposal, highQC)
+ 7: as a replica
+ 8:   wait for message m from leader(curView)
+           m : matchingMsg(m, prepare, curView)
+ 9:   if m.node extends from m.justify.node and
+                safeNode(m.node, m.justify) then
+10:    send voteMsg(prepare, m.node, bot) to leader(curView)
+    |> pre-commit phase
+11:   as a leader
+12:     wait for (n - f ) votes:
+	     V <- {v | matchingMsg(v, prepare, curView)}
+13:     prepareQC <- QC(V)
+14:     broadcast Msg(pre-commit, bot, prepareQC)
+15:   as a replica
+16:     wait for message m from leader(curView)
+	     m : matchingQC(m.justify, prepare, curView)
+17:     prepareQC <- m.justify
+18:     send to leader(curView)
+	     voteMsg(pre-commit, m.justify.node, bot)
+    |> commit phase
+19:   as a leader
+20:     wait for (n - f ) votes:
+             V <- {v | matchingMsg(v, pre-commit, curView)}
+21:     precommitQC <- QC(V)
+22:     broadcast Msg(commit, bot, precommitQC)
+23:   as a replica
+24:     wait for message m from leader(curView)
+             m : matchingQC(m.justify, pre-commit, curView)
+25:     lockedQC <- m.justify
+26:     send to leader(curView)
+             voteMsg(commit, m.justify.node, bot)
+    |> decide phase
+27: as a leader
+28:   wait for (n - f ) votes:
+      	 V <- {v | matchingMsg(v, commit, curView)}
+29:   commitQC <- QC(V)
+30:   broadcast Msg(decide, bot, commitQC)
+31: as a replica
+32:   wait for message m from leader(curView)
+      	   m : matchingQC(m.justify, commit, curView)
+33:   execute new commands through m.justify.node,
+      respond to clients
+    |> Finally
+34:   nextView interrupt: goto this line if nextView(curView) is
+      called during "wait for" in any phase
+35:   send Msg(new-view, bot, prepareQC) to leader(curView + 1)
+"""
+
+# Paper
+class Message:
+    def __init__(self, type, viewNumber, node, qc):
+        self.type = type
+        self.viewNumber = curView
+        self.node = node
+        self.justify = qc
+
+class QC:
+    def __init__(self, type, viewNumber, node, sig):
+        self.type = type
+        self.viewNumber = viewNumber
+        self.node = node
+        self.sig = sig
+
+def matchingMsg(m, t, v):
+    return m.type == t and m.viewNumber == v
+
+def matchingQC(qc, t, v):
+    return qc.type == t and qc.viewNumber == v
+
+# MSG = (type, viewNumber, node, justify)
+# QC = (type, viewNumber, node, sig)
+
+class Replica(process):
+    def setup():
+        curView = 1
+        # TODO: Nextview Timeout
+        pass
+
+    
+    def run():
+        # (From paper) Send special new-view messages from view 0 at the beginning
+
+        pass
+    
+    def leader_role():
+        # TODO: [Define] n, f
+        await(len(setof(p, received('NEW-VIEW', _curView - 1, _, _)) >= n - f))
+
+        highQC = anyof(setof(
+            (qc_type, qc_viewNumber, qc_node, qc_sig), 
+            received(('NEW-VIEW', _curView - 1, _, (qc_type, qc_viewNumber, qc_node, qc_sig))), 
+            qc_viewNumber == max(setof(qc_viewNumber1, received(('NEW-VIEW', _curView - 1, _, (_, qc_viewNumber1, _, _)))))))
+        
+        curProposal = # TODO: create proposal
+
+        # PREPARE PHASE
+        broadcast(('PREPARE', curProposal, highQC)) # TODO: Define broadcast
+
+        await(len(setof(p, received('PREPARE', _curView, _, _   )) >= n - f))
+        
+        prepareQC = # TODO: calculate prepare QC
+
+        # COMMIT PHASE
+        broadcast(('PRE-COMMIT', None, prepareQC))
+
+        await(len(setof(p, received('PRE-COMMIT', _curView, _, _)) >= n - f))
+        
+        precommitQC = # TODO: calculate precommit QC
+        
+        broadcast(('COMMIT', None, precommitQC))
+
+        # DECIDE PHASE
+        await(len(setof(p, received('COMMIT', _curView, _, _)) >= n - f))
+        
+        commitQC = # TODO: calculate commit QC
+        
+        broadcast(('DECIDE', None, commitQC))
+
+        nextView()  # TODO: Define nextView
+
+    def replica_role():
+        leader_replica = get_leader(curView)
+        
+        if await(
+            received((_, _, _, qc), from_ = leader_replica) and
+            received((_, _, _, qc), from_ = leader_replica) and
+            received((_, _, _, qc), from_ = leader_replica) and
+            received((_, _, _, qc), from_ = leader_replica)
+        ):
+            nextView()
+        elif timeout():
+            # [Paper] goto this line if nextView(curView ) is called during “wait for” in any phase
+            nextView()
+
+    
+    def receive(msg = ('NEW-VIEW', viewNumber, node, qc)):
+        pass
+    
+    def receive(msg = ('PREPARE', viewNumber, node, qc)):
+        pass
+
+    def receive(msg = ('PRE-COMMIT', viewNumber, node, qc)):
+        pass
+    
+    def receive(msg = ('COMMIT', viewNumber, node, qc)):
+        pass
+
+    def receive(msg = ('DECIDE', viewNumber, node, qc)):
+        pass
+
+    # Find leader for current view
+    def get_leader(viewNumber):
+        # TODO: find leader
+        pass
+
+    # Utility functions
+
+    # Paper
+    def matchingQC()

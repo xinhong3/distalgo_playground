@@ -1,6 +1,5 @@
-# WRITE PSEUDOCODE
 """
-copied from paper, except:
+[Liu] Copied from paper, except:
   replaced latex to use ascii <-, |>, <, >, and, or, in, -, '', ', big(
   added _ before subscript
 
@@ -109,6 +108,10 @@ TIMEOUT = 5
 def matchingQC(mtype, viewNum, qc):
     return qc[0] == mtype and qc[1] == viewNum
 
+
+    def anyof(s):
+        return next(iter(s)) if s else None
+
 # Combine partial signatures into QC = (mtype, mview, mnode, m)
 def combine_signature():
     return "dummy_signature"
@@ -123,21 +126,14 @@ class Replica(process):
         self.n = len(peers)
         self.f = (n - 1)/3
 
-        self.pid = 0
-        self.roll = randint(0, 1000 * n)
+        self.pid = sorted(list(peers)).index(self)
 
-        # Backup non-volatile state
         self.lockedQC = None
         self.prepareQC = None
 
     def is_curr_leader():
         return (self.curView % n) == self.pid
     
-    def is_next_leader():
-        return ((self.curView + 1) % n) == self.pid
-
-    def anyof(s):
-        return next(iter(s)) if s else None
 
     def start_leader():
         await(len(setof(p, received(('new_view',curView,_,_,_), from_=p))) >= n - f)
