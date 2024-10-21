@@ -102,7 +102,7 @@ Algorithm 2 Basic HotStuff protocol (for replica r).
 # QC = (type, viewNumber, node, sig)
 
 class Replica(process):
-    def setup(replicas: set, client: set):
+    def setup(replicas: set, client: set, nextViewTimeout: float):
         
         # [Paper] curView starts with 1
         curView = 1
@@ -113,14 +113,17 @@ class Replica(process):
         replica_index = {i: add for i, add in enumerate(sorted(list(replicas)))}
         pid = sorted(list(replicas)).index(self)
         
-        # TODO: Nextview Timeout
-        pass
 
     
     def run():
-        # (From paper) Send special new-view messages from view 0 at the beginning
-
-        pass
+        # (From paper) TODO: Send special new-view messages from view 0 at the beginning
+        
+        if is_leader():
+            leader_role()
+        else:
+            replica_role()
+        
+        # TODO: maybe timeout in here?
     
     def leader_role():
         await(len(setof(p, received('NEW-VIEW', _curView - 1, _, _)) >= n - f))
@@ -167,10 +170,10 @@ class Replica(process):
         leader_replica = get_leader(curView)
         
         if await(
-            received((_, _, _, qc), from_ = leader_replica) and
-            received((_, _, _, qc), from_ = leader_replica) and
-            received((_, _, _, qc), from_ = leader_replica) and
-            received((_, _, _, qc), from_ = leader_replica)
+            some(m, m in received(('PREPARE', m), from_ = leader_replica), has = matchingMsg(m, 'PREPARE', curView)) # Replica in prepare phase
+            and # TODO: others
+            # some msg from leader that has matching qc for prepare
+            # some msg from leader that has matching qc for pre-commit
         ):
             nextView()
         elif timeout():
@@ -178,19 +181,19 @@ class Replica(process):
             nextView()
 
     
-    def receive(msg = ('NEW-VIEW', viewNumber, node, qc)):
+    def receive(msg = ('NEW-VIEW', m)):
         pass
     
-    def receive(msg = ('PREPARE', viewNumber, node, qc)):
+    def receive(msg = ('PREPARE', m)):
         pass
 
-    def receive(msg = ('PRE-COMMIT', viewNumber, node, qc)):
+    def receive(msg = ('PRE-COMMIT', m)):
         pass
     
-    def receive(msg = ('COMMIT', viewNumber, node, qc)):
+    def receive(msg = ('COMMIT', m)):
         pass
 
-    def receive(msg = ('DECIDE', viewNumber, node, qc)):
+    def receive(msg = ('DECIDE', m)):
         pass
 
     def get_leader(viewNumber):
