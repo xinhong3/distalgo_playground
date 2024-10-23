@@ -1,3 +1,14 @@
+from collections import namedtuple
+import random
+import sys
+import logging
+
+# Change log level to DEBUG
+logging.basicConfig(level = logging.DEBUG)
+
+def anyof(s):
+    return next(iter(s)) if s else None
+
 """
 [Liu] Copied from paper, except:
   replaced latex to use ascii <-, |>, <, >, and, or, in, -, '', ', big(
@@ -97,138 +108,252 @@ Algorithm 2 Basic HotStuff protocol (for replica r).
 35:   send Msg(new-view, bot, prepareQC) to leader(curView + 1)
 """
 
+""" Algorithm 1 (Utilities) - From paper
+---------------------------------------- Object methods ----------------------------------------
+function Msg(type, node, qc)
+function voteMsg(type, node, qc)
+procedure createLeaf(parent, cmd)
+function QC(V)
+function safeNode(node, qc)
 
-# MSG = (type, viewNumber, node, justify)
-# QC = (type, viewNumber, node, sig)
+---------------------------------------- Utility functions -------------------------------------
+matchingMsg(m, t, v)
+machtingQC(qc, t, v)
+"""
 
-class Replica(process):
-    def setup(replicas: set, client: set, nextViewTimeout: float):
-        
-        # [Paper] curView starts with 1
-        curView = 1
-        
-        n = len(replicas)
-        f = 2 * n//3 + 1    # TODO: n >= 3f + 1, check if this is correct
+"""
+Modify from the paper:
+    1. namedtuples for Msg and QC
+    2. Use list to represent blockchain
+        2.1 modified createLeaf function for list
+        2.2 safeNode function for list
+        2.3 check node.extend (use list_extends instead)
+"""
 
-        replica_index = {i: add for i, add in enumerate(sorted(list(replicas)))}
-        pid = sorted(list(replicas)).index(self)
-        
+# Type definition: Msg and QC
+QC = namedtuple('QC', ['type', 'viewNumber', 'node', 'sig'])                    # Algorithm 1: Line 15 - 20
+Message = namedtuple('Message', ['type', 'viewNumber', 'node', 'justify', 'partialSig'], defaults = (None, ))      # Algorithm 1: Line 1 - 6
 
-    
-    def run():
-        # (From paper) TODO: Send special new-view messages from view 0 at the beginning
-        
-        if is_leader():
-            leader_role()
-        else:
-            replica_role()
-        
-        # TODO: maybe timeout in here?
-    
-    def leader_role():
-        await(len(setof(p, received('NEW-VIEW', _curView - 1, _, _)) >= n - f))
+# MODIFIED from the paper
+def list_extends(l1, l2):
+    '''Check if l1 extends l2, works for frozen list as well'''
+    if l2 == None:
+        return True
+    elif l1 == None:
+        return False
+    return list(l1)[:len(l2)] == list(l2)
 
-        highQC = anyof(setof(
-            (qc_type, qc_viewNumber, qc_node, qc_sig), 
-            received(('NEW-VIEW', _curView - 1, _, (qc_type, qc_viewNumber, qc_node, qc_sig))), 
-            qc_viewNumber == max(setof(qc_viewNumber1, received(('NEW-VIEW', _curView - 1, _, (_, qc_viewNumber1, _, _)))))))
-
-        curProposal = createLeaf(highQC.node, client_command) # TODO: client_command? highQC.node?
-
-        # PREPARE PHASE
-        broadcast(('PREPARE', curProposal, highQC))
-
-        await(len(setof(p, received('PREPARE', _curView, _, _)) >= n - f))
-        
-        prepareQC = QC(
-            setof(m, received(m), matchingMsg(m, 'PREPARE', curView))
-            )
-
-        # COMMIT PHASE
-        broadcast(('PRE-COMMIT', None, prepareQC))
-
-        await(len(setof(p, received('PRE-COMMIT', _curView, _, _)) >= n - f))
-        
-        precommitQC = QC(
-            setof(m, received(m, from_ = replicas), matchingMsg(m, 'PRE-COMMIT', curView))
-            )
-        
-        broadcast(('COMMIT', None, precommitQC))
-
-        # DECIDE PHASE
-        await(len(setof(p, received('COMMIT', _curView, _, _)) >= n - f))
-        
-        commitQC = QC(
-            setof(m, received(m, from_ = replicas), matchingMsg(m, 'COMMIT', curView))
-        )
-        
-        broadcast(('DECIDE', None, commitQC))
-
-        nextView()
-
-    def replica_role():
-        leader_replica = get_leader(curView)
-        
-        if await(
-            some(m, m in received(('PREPARE', m), from_ = leader_replica), has = matchingMsg(m, 'PREPARE', curView)) # Replica in prepare phase
-            and # TODO: others
-            # some msg from leader that has matching qc for prepare
-            # some msg from leader that has matching qc for pre-commit
-        ):
-            nextView()
-        elif timeout():
-            # [Paper] goto this line if nextView(curView ) is called during “wait for” in any phase
-            nextView()
-
-    
-    def receive(msg = ('NEW-VIEW', m)):
-        pass
-    
-    def receive(msg = ('PREPARE', m)):
-        pass
-
-    def receive(msg = ('PRE-COMMIT', m)):
-        pass
-    
-    def receive(msg = ('COMMIT', m)):
-        pass
-
-    def receive(msg = ('DECIDE', m)):
-        pass
-
-    def get_leader(viewNumber):
-        return replica_index[curView % n]
-    
-    # TODO: Should be useful, otherwise delete this.
-    def is_leader():
-        return pid == curView % n
-
-    def broadcast(mtype: str, node: list, qc: list):
-        output(f'Broadcast message ({mtype}, {curView}, {node}, {qc}) to replicas.')
-        send((mtype, curView, node, qc), to = replicas)
-    
-    def nextView():
-        # [Paper] goto this line if nextView(curView) is called during “wait for” in any phase
-        send(('NEW-VIEW', curView, None, prepareQC), to = get_leader(curView + 1))
-# Type definitions (from paper)
-class Message:
-    def __init__(self, type, viewNumber, node, qc):
-        self.type = type
-        self.viewNumber = curView
-        self.node = node
-        self.justify = qc
-
-class QC:
-    def __init__(self, type, viewNumber, node, sig):
-        self.type = type
-        self.viewNumber = viewNumber
-        self.node = node
-        self.sig = sig
 
 # Utility functions (from paper)
 def matchingMsg(m, t, v):
-    return m.type == t and m.viewNumber == v
+    # output(f'[{pid}] Matching message {m} with type {t} and view number {v}') # [DEBUG]
+    if isinstance(m, Message):
+        return m.type == t and m.viewNumber == v
+    else:
+        try:
+            _m = Message._make(m)
+            output(f'[{pid}] matched: {_m.type == t and _m.viewNumber == v}')
+            return _m.type == t and _m.viewNumber == v
+        except TypeError:
+            return False
 
 def matchingQC(qc, t, v):
-    return qc.type == t and qc.viewNumber == v
+    if isinstance(qc, QC):
+        return qc.type == t and qc.viewNumber == v
+    else:
+        try:
+            _qc = QC._make(qc)
+            return _qc.type == t and _qc.viewNumber == v
+        except TypeError:
+            return False
 
+# Not explicitly defined in the paper
+def tcombine(m, s):
+    '''Combine partial signatures in set s for message m'''
+    signature = (m, s)
+    print(f'Combined signature: {signature}')
+    return signature
+
+class Replica(process):
+    def setup(replicas: set, client: set, f: int, nextViewTimeout: float):        
+        # 4.2 - Bookkeeping variables
+        self.curView = 1
+        self.prepareQC = None
+        self.lockedQC = None
+        self.blocks = list()  # Not explicitly defined in the paper
+
+        # Not explicitly defined in the paper
+        self.n = len(replicas)   # Number of replicas
+        self.replica_index = {i: add for i, add in enumerate(sorted(list(replicas)))}    # Index of replicas -- used in leader rotation
+        self.pid = sorted(list(replicas)).index(self)
+        self.cmd = None
+    
+    def run():
+        broadcast(Message('NEW-VIEW', 0, None, self.prepareQC))          # Special new-view messages from view 0
+
+        while True:         # For curView <- 1, 2, 3, . . . do
+            # Not explicitly defined in the paper
+            if await(leader_role() if is_leader() else replica_role()): pass
+            elif timeout(nextViewTimeout): pass
+
+            nextView()
+
+    def leader_role():
+        output(f'[{pid}] Enter leader role, view: {int(curView)}')
+
+        # PREPARE PHASE
+        await(len(setof((m, p), received(m, from_ = p), matchingMsg(m, 'NEW-VIEW', curView - 1))) >= n - f)
+        
+        M = setof((m, p), received(m, from_ = p), matchingMsg(m, 'NEW-VIEW', curView - 1))  # [DEBUG]
+        output(f'[{pid}] Messages collected: {M}')                                          # [DEBUG]
+
+        highQC = anyof(
+            setof((m, _) in M, m.justify.viewNumber == max(setof(m1.justify.viewNumber, (m1, _) in M, m1.justify != None)))
+        ) if not each((m, p) in M, has = m.justify == None) else None
+
+        output(f'[{pid}] HighQC: {highQC}')  # [DEBUG]
+
+        curProposal = createLeaf(highQC.node if highQC is not None else list(), random.randint(0, 100))  # Line 5
+        
+        output(f'[{pid}] Current proposal: {curProposal}')  # [DEBUG]
+
+        broadcast(Msg('PREPARE', curProposal, highQC))
+
+        # PRE-COMMIT PHASE
+        if await(len(setof((vote, p), received(vote, from_ = p), matchingMsg(vote, 'PREPARE', curView))) >= n - f):
+            pass
+        elif timeout(2):
+            pass
+        output(f'Messgae received: {setof((vote, p), received(vote, from_ = p), matchingMsg(vote, "PREPARE", curView))}')  # [DEBUG]
+        output(f'[{pid}] Received PREPARE messages.')  # [DEBUG]
+
+        prepareQC = QC(setof(m, received(m, from_ = replicas), matchingMsg(m, 'PREPARE', curView)))
+        broadcast(Msg('PRE-COMMIT', None, prepareQC))
+
+        # COMMIT PHASE
+        await(len(setof(p, received(vote, from_ = p), matchingMsg(vote, 'PRE-COMMIT', curView))) >= n - f)
+        precommitQC = QC(setof(m, received(m, from_ = replicas), matchingMsg(m, 'PRE-COMMIT', curView)))
+        broadcast(Msg('COMMIT', None, precommitQC))
+
+        # DECIDE PHASE
+        await(len(setof(p, received(vote, from_ = p), matchingMsg(vote, 'COMMIT', curView))) >= n - f)
+        commitQC = QC(setof(m, received(m, from_ = replicas), matchingMsg(m, 'COMMIT', curView)))
+        broadcast(Msg('DECIDE', None, commitQC))
+        
+        return True
+    
+    def replica_role():
+        output(f'[{pid}] Enter replica role, view: {int(curView)}')
+        leader_p = get_leader(curView)  # Leader of the current view
+        
+        # PREPARE PHASE
+        await(some(received(m, from_ = leader_p), has = matchingMsg(m, 'PREPARE', curView)))     # Line 8
+        
+        # TODO: FINISH THIS PART [Line 9 - 10]
+        (mnode, mjustify) = anyof(setof((m.node, m.justify), received(m, from_ = leader_p), matchingMsg(m, 'PREPARE', curView)))
+
+        output(f'[{pid}] Received message: {mnode}, {mjustify}')  # [DEBUG]
+
+        # What if mjustify is None?
+        if list_extends(mnode, mjustify.node if mjustify is not None else None) and safeNode(mnode, mjustify.node if mjustify is not None else None): # Line 9
+            send(voteMsg('PREPARE', list(mnode), None), to = leader_p) # Line 10
+            output(f'[{pid}] Sent vote message to leader {leader_p}.')  # [DEBUG]
+
+        # PRE-COMMIT PHASE
+        await(some(received(m, from_ = leader_p), has = matchingQC(m.justify, 'PREPARE', curView))) # Line 16
+        prepareQC = anyof(setof(m.justify in received(m, from_ = leader_p), matchingQC(m.justify, 'PREPARE', curView)))
+
+        # COMMIT PHASE
+        await(some(received(m, from_ = leader_p), has = matchingQC(m.justify, 'PRE-COMMIT', curView))) # Line 24
+        lockedQC = anyof(setof(m.justify in received(m, from_ = leader_p), matchingQC(m.justify, 'PRE-COMMIT', curView)))
+        
+        # DECIDE PHASE
+        # Line 32: wait for message m form leader(curView)?
+        await(some(received(m, from_ = leader_p), has = matchingQC(m.justify, 'COMMIT', curView))) # Line 33
+        execute(anyof(setof(m.justify in received(m, from_ = leader_p), matchingQC(m.justify, 'COMMIT', curView)))) # Line 34
+        
+        return True
+    
+    # def receive(msg = ('COMMAND', command_n, command)):
+    #     output(f'Received command {command} from client.')
+    #     self.cmd = command
+
+    def execute(qc):
+        output(f'Executing command {qc.node}.')
+        # TODO: impl
+
+    def get_leader(viewNumber):
+        return replica_index[viewNumber % n]
+    
+    def is_leader():
+        return pid == curView % n
+
+    def broadcast(msg):
+        output(f'Broadcast message {msg} to replicas.')
+        send(msg, to = replicas)
+    
+    def nextView():
+        # [Paper] goto this line if nextView(curView) is called during “wait for” in any phase
+        output(f'Sending NEW-VIEW message: {Msg("NEW-VIEW", None, prepareQC)} to leader {get_leader(curView + 1)}')
+        send(Msg('NEW-VIEW', None, prepareQC), to = get_leader(curView + 1))
+    
+    # MODIFIED from the paper
+    def createLeaf(parent, cmd):
+        parent = list(parent)
+        parent.append(cmd)
+        return parent
+
+    def voteMsg(mtype, node, qc):
+        m = Msg(mtype, node, qc)
+        output(f'1: {m}')
+        m = m._replace(partialSig=tsign((m.type, m.viewNumber, m.node)))
+        output(f'Vote message: {m}') # [DEBUG]
+        return m
+    
+    def Msg(mtype, node, qc):
+        return Message(mtype, curView, node, qc)
+    
+    # Not explicitly defined in the paper
+    def tsign(m):
+        output(f'Signing message {m}')
+        return (pid, )
+    
+    def safeNode(node, qc):     # Line 25 - 27
+        return (list_extends(node, None if self.lockedQC == None else self.lockedQC.node) or qc.viewNumber > self.lockedQC.viewNumber)
+    
+    def QC(V):
+        m = anyof(V)
+        qc = QC(m.type, m.viewNumber, m.node, tcombine((m.type, m.viewNumber, m.node), {m.partialSig for m in V}))
+
+# class Client(process):
+#     def setup(replicas: set, f: int):
+#         self.replicas = replicas
+#         self.command_n = 0
+    
+#     def run():
+#         for i in range(10):
+#             command = random.randint(0, 100)
+#             output(f'Client sends command {command}.')
+#             # Client broadcasts command to replicas
+#             send(('COMMAND', command_n, command), to = replicas)
+#             # Await for f + 1 responses
+#             await(len(setof(p, received(('ACK', command_n), from_ = p))) >= f + 1)
+#             output(f'Command: {command} committed.')
+             
+def main():
+    nReplicas = int(sys.argv[1]) if len(sys.argv) > 1 else 4
+    nFaulty = int(sys.argv[2]) if len(sys.argv) > 2 else 1
+    nextViewTimeout = float(sys.argv[4]) if len(sys.argv) > 4 else 10.0
+    
+    assert nReplicas > 3 * nFaulty, 'nReplicas should be greater than 3 * nFaulty'
+
+    replicas = new(Replica, num = nReplicas)
+    # client = new(Client, num = 1)
+
+    setup(replicas, (replicas, None, nFaulty, nextViewTimeout))
+    # setup(client, (replicas, nFaulty))
+
+    start(replicas)
+
+    await(False)
+    # start(client)
