@@ -1,0 +1,43 @@
+"""
+Issue: Frozen list during message passing.
+    Message is not delivered, and no error or warning is raised.
+
+Related issue:
+https://github.com/nteract/vdom/issues/104
+
+"""
+import logging
+
+logging.basicConfig(level=logging.INFO)
+
+def anyof(s):
+    return next(iter(s)) if s else None
+
+class P1(process):
+    def setup(p: set):
+        pass
+    def run():
+        send(('hello', [1,2,3]), to=p)  # 1. msg has some list
+        output(f'P1 sent hello to P2')
+        if await(some(received(('world', _), from_=p))): output(f'P1 received world from P2') # 4. P1 never received world from P2
+        elif timeout(3): output("P1 never received world from P2")
+
+class P2(process):
+    def setup(p: set):
+        pass
+    def run():
+        await(some(received(('hello', _), from_=p)))
+        output(f'P2 received hello from P1')
+        s = anyof((setof(m, received(('hello', m), from_=p))))
+        output(f'P2 received hello from P1: {s}')   # 2. s is a frozen list
+        send(('world', s), to=p)                    # 3. send frozen list back (never made it and no error or warning?)
+        output(f'P2 sent world to P1')
+
+def main():
+    p1 = new(P1, num = 1)
+    p2 = new(P2, num = 1)
+    
+    setup(p1, (p2,))
+    setup(p2, (p1,))
+
+    start(p1 | p2)
