@@ -147,11 +147,14 @@ def list_extends(l1, l2):
 
 # Utility functions (from paper)
 # Not explicitly defined in the paper
-def tcombine(m, s):
-    '''Combine partial signatures in set s for message m'''
-    signature = (m, s)
-    print(f'Combined signature: {signature}')
-    return signature
+def tcombine(m, s: set):
+    '''Dummy signature combine function.
+    Args:
+        m: message
+        s: set of partial signatures
+    '''
+    return set(s)
+    
 
 class Replica(process):
     def setup(replicas: set, client: set, f: int, nextViewTimeout: float):        
@@ -188,12 +191,16 @@ class Replica(process):
         # PREPARE PHASE
         await(len(setof((m, p), received(m, from_ = p), matchingMsg(m, 'NEW-VIEW', curView - 1))) >= n - f)
         
-        M = setof((m, p), received(m, from_ = p), matchingMsg(m, 'NEW-VIEW', curView - 1))  # [DEBUG]
+        M = setof(m, received(m), matchingMsg(m, 'NEW-VIEW', curView - 1))  # [DEBUG]
         output(f'[{pid}] Messages collected: {M}')                                          # [DEBUG]
 
-        highQC = anyof(
-            setof((m, _) in M, m.justify.viewNumber == max(setof(m1.justify.viewNumber, (m1, _) in M, m1.justify != None)))
-        ) if not each((m, p) in M, has = m.justify == None) else None
+        # highQC = anyof(
+        #     setof(m in {m for m, _ in M}, m.justify.viewNumber == max(setof(m1.justify.viewNumber, (m1, _) in M, m1.justify != None)))
+        # ) if not each((m, p) in M, has = m.justify == None) else None
+
+        highQC = to_justify(anyof(
+            setof(m.justify, m in M, m.justify.viewNumber == max(setof(m1.justify.viewNumber, m1 in M, m1.justify != None)))         
+        )) if some(m in M, has = m.justify != None) else None
 
         output(f'[{pid}] HighQC: {highQC}')  # [DEBUG]
 
@@ -228,6 +235,10 @@ class Replica(process):
         
         return True
     
+    def to_justify(qc):
+        ''' Transform every frozen obj to normal obj in the qc. This is to mitigate issue with lost messages in distalgo.'''
+        return Justify(qc.type, qc.viewNumber, list(qc.node) if qc.node != None else None, set(qc.sig) if qc.sig != None else None)
+    
     def replica_role():
         output(f'[{pid}] Enter replica role, view: {int(curView)}')
         leader_p = get_leader(curView)  # Leader of the current view
@@ -249,12 +260,12 @@ class Replica(process):
         await(some(received(m, from_ = leader_p), has = matchingQC(m.justify, 'PREPARE', curView))) # Line 16
         s = setof(m.justify, received(m, from_ = leader_p), matchingQC(m.justify, 'PREPARE', curView))
         output(f'[{pid}] Received PREPARE message = {s}.')  # [DEBUG]
-        prepareQC = anyof(setof(m.justify, received(m, from_ = leader_p), matchingQC(m.justify, 'PREPARE', curView)))
+        prepareQC = to_justify(anyof(setof(m.justify, received(m, from_ = leader_p), matchingQC(m.justify, 'PREPARE', curView))))
         send(voteMsg('PRE-COMMIT', prepareQC.node, None), to = leader_p) # Line 17
 
         # COMMIT PHASE
         await(some(received(m, from_ = leader_p), has = matchingQC(m.justify, 'PRE-COMMIT', curView))) # Line 24
-        lockedQC = anyof(setof(m.justify, received(m, from_ = leader_p), matchingQC(m.justify, 'PRE-COMMIT', curView)))
+        lockedQC = to_justify(anyof(setof(m.justify, received(m, from_ = leader_p), matchingQC(m.justify, 'PRE-COMMIT', curView))))
         send(voteMsg('COMMIT', lockedQC.node, None), to = leader_p) # Line 25
         
         # DECIDE PHASE
@@ -297,8 +308,7 @@ class Replica(process):
 
     def voteMsg(mtype, node, qc):
         m = Msg(mtype, list(node) if node else None, qc)
-        output(f'1: {m}')
-        m = m._replace(partialSig=tsign((m.type, m.viewNumber, list(m.node) if m.node else None)))
+        m = m._replace(partialSig=tsign((m.type, m.viewNumber, m.node)))
         output(f'Vote message: {m}') # [DEBUG]
         return m
     
@@ -307,8 +317,9 @@ class Replica(process):
     
     # Not explicitly defined in the paper
     def tsign(m):
-        output(f'Signing message {m}')
-        return (pid, )
+        ''' Dummy function, only gives pid. TODO: use a real threshold signature lib '''
+        output(f'Signing message {m}')  # [DEBUG]
+        return pid
     
     def safeNode(node, qc):     # Line 25 - 27
         return (list_extends(node, None if self.lockedQC == None else self.lockedQC.node) or qc.viewNumber > self.lockedQC.viewNumber)
@@ -318,7 +329,7 @@ class Replica(process):
         m = anyof(V)
         if m == None:
             return None
-        justify = Justify(m.type, m.viewNumber, list(m.node) if m.node != None else None, tcombine((m.type, m.viewNumber, list(m.node) if m.node != None else None), {m.partialSig for m in V}))
+        justify = Justify(m.type, m.viewNumber, list(m.node) if m.node != None else None, tcombine((m.type, m.viewNumber, m.node), {m.partialSig for m in V}))
         output(f'QC: {justify}')  # [DEBUG]
         return justify
 
