@@ -2,9 +2,10 @@ from collections import namedtuple
 import random
 import sys
 import logging
+import time
 
 # Change log level to DEBUG
-logging.basicConfig(level = logging.DEBUG)
+logging.basicConfig(level = logging.INFO)
 
 def anyof(s):
     return next(iter(s)) if s else None
@@ -131,7 +132,7 @@ Modify from the paper:
 """
 
 # Type definition: Msg and QC
-QC = namedtuple('QC', ['type', 'viewNumber', 'node', 'sig'])                    # Algorithm 1: Line 15 - 20
+Justify = namedtuple('Justify', ['type', 'viewNumber', 'node', 'sig'])                    # Algorithm 1: Line 15 - 20
 Message = namedtuple('Message', ['type', 'viewNumber', 'node', 'justify', 'partialSig'], defaults = (None, ))      # Algorithm 1: Line 1 - 6
 
 # MODIFIED from the paper
@@ -145,28 +146,6 @@ def list_extends(l1, l2):
 
 
 # Utility functions (from paper)
-def matchingMsg(m, t, v):
-    # output(f'[{pid}] Matching message {m} with type {t} and view number {v}') # [DEBUG]
-    if isinstance(m, Message):
-        return m.type == t and m.viewNumber == v
-    else:
-        try:
-            _m = Message._make(m)
-            output(f'[{pid}] matched: {_m.type == t and _m.viewNumber == v}')
-            return _m.type == t and _m.viewNumber == v
-        except TypeError:
-            return False
-
-def matchingQC(qc, t, v):
-    if isinstance(qc, QC):
-        return qc.type == t and qc.viewNumber == v
-    else:
-        try:
-            _qc = QC._make(qc)
-            return _qc.type == t and _qc.viewNumber == v
-        except TypeError:
-            return False
-
 # Not explicitly defined in the paper
 def tcombine(m, s):
     '''Combine partial signatures in set s for message m'''
@@ -177,10 +156,11 @@ def tcombine(m, s):
 class Replica(process):
     def setup(replicas: set, client: set, f: int, nextViewTimeout: float):        
         # 4.2 - Bookkeeping variables
-        self.curView = 1
+        self.curView = 0
         self.prepareQC = None
         self.lockedQC = None
         self.blocks = list()  # Not explicitly defined in the paper
+        self.replicas = frozenset(replicas)  # Set of replicas
 
         # Not explicitly defined in the paper
         self.n = len(replicas)   # Number of replicas
@@ -192,11 +172,15 @@ class Replica(process):
         broadcast(Message('NEW-VIEW', 0, None, self.prepareQC))          # Special new-view messages from view 0
 
         while True:         # For curView <- 1, 2, 3, . . . do
-            # Not explicitly defined in the paper
-            if await(leader_role() if is_leader() else replica_role()): pass
-            elif timeout(nextViewTimeout): pass
+            curView += 1
+            if await(leader_role() if is_leader() else replica_role()):
+                pass
+            elif timeout(nextViewTimeout):
+                pass
 
             nextView()
+
+            time.sleep(2)
 
     def leader_role():
         output(f'[{pid}] Enter leader role, view: {int(curView)}')
@@ -220,24 +204,26 @@ class Replica(process):
         broadcast(Msg('PREPARE', curProposal, highQC))
 
         # PRE-COMMIT PHASE
-        if await(len(setof((vote, p), received(vote, from_ = p), matchingMsg(vote, 'PREPARE', curView))) >= n - f):
-            pass
-        elif timeout(2):
-            pass
+        await(len(setof((vote, p), received(vote, from_ = p), matchingMsg(vote, 'PREPARE', curView))) >= n - f)
         output(f'Messgae received: {setof((vote, p), received(vote, from_ = p), matchingMsg(vote, "PREPARE", curView))}')  # [DEBUG]
         output(f'[{pid}] Received PREPARE messages.')  # [DEBUG]
 
-        prepareQC = QC(setof(m, received(m, from_ = replicas), matchingMsg(m, 'PREPARE', curView)))
+        prepareQC = QC(setof(m, received(m), matchingMsg(m, 'PREPARE', curView)))                         # TODO: QC function implementation
+        #send((Msg('PRE-COMMIT', None, prepareQC)), to = replicas)
         broadcast(Msg('PRE-COMMIT', None, prepareQC))
 
         # COMMIT PHASE
         await(len(setof(p, received(vote, from_ = p), matchingMsg(vote, 'PRE-COMMIT', curView))) >= n - f)
-        precommitQC = QC(setof(m, received(m, from_ = replicas), matchingMsg(m, 'PRE-COMMIT', curView)))
+        output(f'lp2')
+        output(f'Message received: {setof(p, received(vote, from_ = p), matchingMsg(vote, "PRE-COMMIT", curView))}')  # [DEBUG]
+        precommitQC = QC(setof(m, received(m), matchingMsg(m, 'PRE-COMMIT', curView)))
         broadcast(Msg('COMMIT', None, precommitQC))
 
         # DECIDE PHASE
         await(len(setof(p, received(vote, from_ = p), matchingMsg(vote, 'COMMIT', curView))) >= n - f)
-        commitQC = QC(setof(m, received(m, from_ = replicas), matchingMsg(m, 'COMMIT', curView)))
+        output(f'lp3')
+        output(f'Message received: {setof(p, received(vote, from_ = p), matchingMsg(vote, "COMMIT", curView))}')  # [DEBUG]
+        commitQC = QC(setof(m, received(m), matchingMsg(m, 'COMMIT', curView)))
         broadcast(Msg('DECIDE', None, commitQC))
         
         return True
@@ -256,21 +242,27 @@ class Replica(process):
 
         # What if mjustify is None?
         if list_extends(mnode, mjustify.node if mjustify is not None else None) and safeNode(mnode, mjustify.node if mjustify is not None else None): # Line 9
-            send(voteMsg('PREPARE', list(mnode), None), to = leader_p) # Line 10
+            send(voteMsg('PREPARE', list(mnode), None), to = leader_p) # Line 10, need to wrap frozenlist with list so it can be unpickeled
             output(f'[{pid}] Sent vote message to leader {leader_p}.')  # [DEBUG]
 
         # PRE-COMMIT PHASE
         await(some(received(m, from_ = leader_p), has = matchingQC(m.justify, 'PREPARE', curView))) # Line 16
-        prepareQC = anyof(setof(m.justify in received(m, from_ = leader_p), matchingQC(m.justify, 'PREPARE', curView)))
+        s = setof(m.justify, received(m, from_ = leader_p), matchingQC(m.justify, 'PREPARE', curView))
+        output(f'[{pid}] Received PREPARE message = {s}.')  # [DEBUG]
+        prepareQC = anyof(setof(m.justify, received(m, from_ = leader_p), matchingQC(m.justify, 'PREPARE', curView)))
+        send(voteMsg('PRE-COMMIT', prepareQC.node, None), to = leader_p) # Line 17
 
         # COMMIT PHASE
         await(some(received(m, from_ = leader_p), has = matchingQC(m.justify, 'PRE-COMMIT', curView))) # Line 24
-        lockedQC = anyof(setof(m.justify in received(m, from_ = leader_p), matchingQC(m.justify, 'PRE-COMMIT', curView)))
+        lockedQC = anyof(setof(m.justify, received(m, from_ = leader_p), matchingQC(m.justify, 'PRE-COMMIT', curView)))
+        send(voteMsg('COMMIT', lockedQC.node, None), to = leader_p) # Line 25
         
         # DECIDE PHASE
         # Line 32: wait for message m form leader(curView)?
         await(some(received(m, from_ = leader_p), has = matchingQC(m.justify, 'COMMIT', curView))) # Line 33
-        execute(anyof(setof(m.justify in received(m, from_ = leader_p), matchingQC(m.justify, 'COMMIT', curView)))) # Line 34
+        execute(anyof(setof(m.justify, received(m, from_ = leader_p), matchingQC(m.justify, 'COMMIT', curView)))) # Line 34
+
+        output(f'[{pid}] prepareQC = {prepareQC}, lockedQC = {lockedQC}')  # [DEBUG]
         
         return True
     
@@ -289,8 +281,8 @@ class Replica(process):
         return pid == curView % n
 
     def broadcast(msg):
-        output(f'Broadcast message {msg} to replicas.')
-        send(msg, to = replicas)
+        output(f'Broadcast message {msg} to replicas {self.replicas}.')
+        send(msg, to = self.replicas)
     
     def nextView():
         # [Paper] goto this line if nextView(curView) is called during “wait for” in any phase
@@ -304,14 +296,14 @@ class Replica(process):
         return parent
 
     def voteMsg(mtype, node, qc):
-        m = Msg(mtype, node, qc)
+        m = Msg(mtype, list(node) if node else None, qc)
         output(f'1: {m}')
-        m = m._replace(partialSig=tsign((m.type, m.viewNumber, m.node)))
+        m = m._replace(partialSig=tsign((m.type, m.viewNumber, list(m.node) if m.node else None)))
         output(f'Vote message: {m}') # [DEBUG]
         return m
     
     def Msg(mtype, node, qc):
-        return Message(mtype, curView, node, qc)
+        return Message(mtype, curView, list(node) if node != None else None, qc)
     
     # Not explicitly defined in the paper
     def tsign(m):
@@ -322,8 +314,35 @@ class Replica(process):
         return (list_extends(node, None if self.lockedQC == None else self.lockedQC.node) or qc.viewNumber > self.lockedQC.viewNumber)
     
     def QC(V):
+        '''Returns the QC given a setof vote messages in V'''
         m = anyof(V)
-        qc = QC(m.type, m.viewNumber, m.node, tcombine((m.type, m.viewNumber, m.node), {m.partialSig for m in V}))
+        if m == None:
+            return None
+        justify = Justify(m.type, m.viewNumber, list(m.node) if m.node != None else None, tcombine((m.type, m.viewNumber, list(m.node) if m.node != None else None), {m.partialSig for m in V}))
+        output(f'QC: {justify}')  # [DEBUG]
+        return justify
+
+    def matchingMsg(m, t, v):
+        # output(f'[{pid}] Matching message {m} with type {t} and view number {v}') # [DEBUG]
+        if isinstance(m, Message):
+            return m.type == t and m.viewNumber == v
+        else:
+            try:
+                _m = Message._make(m)
+                output(f'[{pid}] matched: {_m.type == t and _m.viewNumber == v}')
+                return _m.type == t and _m.viewNumber == v
+            except TypeError:
+                return False
+
+    def matchingQC(qc, t, v):
+        if isinstance(qc, Justify):
+            return qc.type == t and qc.viewNumber == v
+        else:
+            try:
+                _qc = Justify._make(qc)
+                return _qc.type == t and _qc.viewNumber == v
+            except TypeError:
+                return False
 
 # class Client(process):
 #     def setup(replicas: set, f: int):

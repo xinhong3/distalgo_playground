@@ -17,7 +17,7 @@ class P1(process):
     def setup(p: set):
         pass
     def run():
-        send(('hello', [1,2,3]), to=p)  # 1. msg has some list
+        send(('hello', (1,2,3)), to=p)  # 1. msg has some list. Try changing this to a tuple, then we don't have a problem.
         output(f'P1 sent hello to P2')
         if await(some(received(('world', _), from_=p))): output(f'P1 received world from P2') # 4. P1 never received world from P2
         elif timeout(3): output("P1 never received world from P2")
