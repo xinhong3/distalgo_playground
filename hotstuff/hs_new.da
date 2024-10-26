@@ -131,11 +131,35 @@ Modify from the paper:
         2.3 check node.extend (use list_extends instead)
 """
 
-# Type definition: Msg and QC
-Justify = namedtuple('Justify', ['type', 'viewNumber', 'node', 'sig'])                    # Algorithm 1: Line 15 - 20
-Message = namedtuple('Message', ['type', 'viewNumber', 'node', 'justify', 'partialSig'], defaults = (None, ))      # Algorithm 1: Line 1 - 6
+## Type definitions from paper
+# [Algorithm 1] Line 1 - 6
+Message = namedtuple('Message', ['type', 'viewNumber', 'node', 'justify', 'partialSig'], defaults = (None, ))
+# [Algorithm 1] Line 15 - 20
+Justify = namedtuple('Justify', ['type', 'viewNumber', 'node', 'sig'])
 
-# MODIFIED from the paper
+# Utility function from paper
+def matchingMsg(m, t, v):
+    if isinstance(m, Message):
+        return m.type == t and m.viewNumber == v
+    else:
+        try:
+            _m = Message._make(m)
+            return _m.type == t and _m.viewNumber == v
+        except TypeError:
+            return False
+
+# Utility function from paper
+def matchingQC(qc, t, v):
+    if isinstance(qc, Justify):
+        return qc.type == t and qc.viewNumber == v
+    else:
+        try:
+            _qc = Justify._make(qc)
+            return _qc.type == t and _qc.viewNumber == v
+        except TypeError:
+            return False
+
+# MODIFIED from the paper (It is node.extend in the paper)
 def list_extends(l1, l2):
     '''Check if l1 extends l2, works for frozen list as well'''
     if l2 == None:
@@ -143,18 +167,6 @@ def list_extends(l1, l2):
     elif l1 == None:
         return False
     return list(l1)[:len(l2)] == list(l2)
-
-
-# Utility functions (from paper)
-# Not explicitly defined in the paper
-def tcombine(m, s: set):
-    '''Dummy signature combine function.
-    Args:
-        m: message
-        s: set of partial signatures
-    '''
-    return set(s)
-    
 
 class Replica(process):
     def setup(replicas: set, client: set, f: int, nextViewTimeout: float):        
@@ -183,6 +195,7 @@ class Replica(process):
 
             nextView()
 
+            # [not in paper] sleep for a bit in between every view
             time.sleep(2)
 
     def leader_role():
@@ -198,7 +211,7 @@ class Replica(process):
         #     setof(m in {m for m, _ in M}, m.justify.viewNumber == max(setof(m1.justify.viewNumber, (m1, _) in M, m1.justify != None)))
         # ) if not each((m, p) in M, has = m.justify == None) else None
 
-        highQC = to_justify(anyof(
+        highQC = to_unfrozen_justify(anyof(
             setof(m.justify, m in M, m.justify.viewNumber == max(setof(m1.justify.viewNumber, m1 in M, m1.justify != None)))         
         )) if some(m in M, has = m.justify != None) else None
 
@@ -235,8 +248,11 @@ class Replica(process):
         
         return True
     
-    def to_justify(qc):
-        ''' Transform every frozen obj to normal obj in the qc. This is to mitigate issue with lost messages in distalgo.'''
+    def to_unfrozen_justify(qc):
+        ''' NOT related to the paper.
+            Transform every frozen obj to normal obj in the qc.
+            Just to mitigate lost messages due to unpicklable frozen objects.
+        '''
         return Justify(qc.type, qc.viewNumber, list(qc.node) if qc.node != None else None, set(qc.sig) if qc.sig != None else None)
     
     def replica_role():
@@ -246,7 +262,7 @@ class Replica(process):
         # PREPARE PHASE
         await(some(received(m, from_ = leader_p), has = matchingMsg(m, 'PREPARE', curView)))     # Line 8
         
-        # TODO: FINISH THIS PART [Line 9 - 10]
+        # Line 9 - 10
         (mnode, mjustify) = anyof(setof((m.node, m.justify), received(m, from_ = leader_p), matchingMsg(m, 'PREPARE', curView)))
 
         output(f'[{pid}] Received message: {mnode}, {mjustify}')  # [DEBUG]
@@ -260,12 +276,12 @@ class Replica(process):
         await(some(received(m, from_ = leader_p), has = matchingQC(m.justify, 'PREPARE', curView))) # Line 16
         s = setof(m.justify, received(m, from_ = leader_p), matchingQC(m.justify, 'PREPARE', curView))
         output(f'[{pid}] Received PREPARE message = {s}.')  # [DEBUG]
-        prepareQC = to_justify(anyof(setof(m.justify, received(m, from_ = leader_p), matchingQC(m.justify, 'PREPARE', curView))))
+        prepareQC = to_unfrozen_justify(anyof(setof(m.justify, received(m, from_ = leader_p), matchingQC(m.justify, 'PREPARE', curView))))
         send(voteMsg('PRE-COMMIT', prepareQC.node, None), to = leader_p) # Line 17
 
         # COMMIT PHASE
         await(some(received(m, from_ = leader_p), has = matchingQC(m.justify, 'PRE-COMMIT', curView))) # Line 24
-        lockedQC = to_justify(anyof(setof(m.justify, received(m, from_ = leader_p), matchingQC(m.justify, 'PRE-COMMIT', curView))))
+        lockedQC = to_unfrozen_justify(anyof(setof(m.justify, received(m, from_ = leader_p), matchingQC(m.justify, 'PRE-COMMIT', curView))))
         send(voteMsg('COMMIT', lockedQC.node, None), to = leader_p) # Line 25
         
         # DECIDE PHASE
@@ -333,27 +349,15 @@ class Replica(process):
         output(f'QC: {justify}')  # [DEBUG]
         return justify
 
-    def matchingMsg(m, t, v):
-        # output(f'[{pid}] Matching message {m} with type {t} and view number {v}') # [DEBUG]
-        if isinstance(m, Message):
-            return m.type == t and m.viewNumber == v
-        else:
-            try:
-                _m = Message._make(m)
-                output(f'[{pid}] matched: {_m.type == t and _m.viewNumber == v}')
-                return _m.type == t and _m.viewNumber == v
-            except TypeError:
-                return False
-
-    def matchingQC(qc, t, v):
-        if isinstance(qc, Justify):
-            return qc.type == t and qc.viewNumber == v
-        else:
-            try:
-                _qc = Justify._make(qc)
-                return _qc.type == t and _qc.viewNumber == v
-            except TypeError:
-                return False
+    # Utility functions (from paper)
+    # Not explicitly defined in the paper
+    def tcombine(m, s: set):
+        '''Dummy signature combine function.
+        Args:
+            m: message
+            s: set of partial signatures
+        '''
+        return set(s)
 
 # class Client(process):
 #     def setup(replicas: set, f: int):
