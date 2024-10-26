@@ -1,0 +1,26 @@
+class Replicas(process):
+    def setup(replicas: set):
+        self.pid = sorted(list(replicas)).index(self)
+        self.replicas = frozenset(replicas)             # Replicas could change by reassignment.
+
+    def run():
+        output(f'[{pid}] I have {len(self.replicas)} friends: {self.replicas}, {self.replicas is replicas}, {type(self.replicas)}.')
+        send(('hello', pid), to = self.replicas)
+        
+        await(len(setof(p, received(('hello', _), from_ = p))) > 5)
+
+        M = setof(m, received(m, from_ = replicas))     # try: from_ = self.replicas
+        
+        output(f'[{pid}] replicas = {replicas}, self.replicas = {self.replicas}.')
+
+        output(f'[{pid}] Received greeting messages: {M}.')
+        
+        output(f'[{pid}] Now I have {len(self.replicas)} friend: {self.replicas}, {self.replicas is replicas}, {type(self.replicas)}.')
+
+def main():
+    nReplicas = 10
+
+    replicas = new(Replicas, num = nReplicas)
+    setup(replicas, (replicas,))
+
+    start(replicas)
