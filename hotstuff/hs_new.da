@@ -110,29 +110,15 @@ Algorithm 2 Basic HotStuff protocol (for replica r).
 35:   send Msg(new-view, bot, prepareQC) to leader(curView + 1)
 """
 
-""" Algorithm 1 (Utilities) - From paper
----------------------------------------- Object methods ----------------------------------------
-function Msg(type, node, qc)
-function voteMsg(type, node, qc)
-procedure createLeaf(parent, cmd)
-function QC(V)
-function safeNode(node, qc)
-
----------------------------------------- Utility functions -------------------------------------
-matchingMsg(m, t, v)
-machtingQC(qc, t, v)
+""" [Note] Modify from the paper:
+        1. namedtuples for Msg and Justify (QC)
+        2. Use list to represent blockchain
+            2.1 modified createLeaf function for list
+            2.2 safeNode function for list
+            2.3 check node.extend (use list_extends instead)
 """
 
-"""
-Modify from the paper:
-    1. namedtuples for Msg and QC
-    2. Use list to represent blockchain
-        2.1 modified createLeaf function for list
-        2.2 safeNode function for list
-        2.3 check node.extend (use list_extends instead)
-"""
-
-## Type definitions from paper
+## [Paper] Type definitions
 # [Algorithm 1] Line 1 - 6
 Message = namedtuple('Message', ['type', 'viewNumber', 'node', 'justify', 'partialSig'], defaults = (None, ))
 # [Algorithm 1] Line 15 - 20
@@ -140,7 +126,7 @@ Justify = namedtuple('Justify', ['type', 'viewNumber', 'node', 'sig'])
 
 class Replica(process):
     def setup(replicas: set, client: set, f: int, nextViewTimeout: float):        
-        # 4.2 - Bookkeeping variables
+        # [Paper] 4.2 - Bookkeeping variables
         self.curView = 0
         self.prepareQC = None
         self.lockedQC = None
@@ -156,7 +142,7 @@ class Replica(process):
         self.cmd = None # TODO: Not used
     
     def run():
-        broadcast(Message('NEW-VIEW', 0, None, self.prepareQC))          # Special new-view messages from view 0
+        broadcast(Message('NEW-VIEW', 0, None, self.prepareQC))          # [Paper] Special new-view messages from view 0
 
         while True:         # [Paper] For curView <- 1, 2, 3, . . . do
             curView += 1
@@ -437,7 +423,7 @@ Client implementation is omitted from the paper. However, it does mention the fo
 def main():
     nReplicas = int(sys.argv[1]) if len(sys.argv) > 1 else 4
     nFaulty = int(sys.argv[2]) if len(sys.argv) > 2 else 1
-    nextViewTimeout = float(sys.argv[4]) if len(sys.argv) > 4 else 10.0
+    nextViewTimeout = float(sys.argv[4]) if len(sys.argv) > 4 else 1.0
     
     assert nReplicas > 3 * nFaulty, 'nReplicas should be greater than 3 * nFaulty'
 
