@@ -359,10 +359,14 @@ class Replica(process):
         '''
         return set(s)
 
+'''
+Client implementation is omitted from the paper. However, it does mention the following:
+[4. Basic Hotstuff] A client sends a command request to all replicas, and waits for responses from f + 1 of them.
+'''
 # class Client(process):
 #     def setup(replicas: set, f: int):
 #         self.replicas = replicas
-#         self.command_n = 0
+#         self.command_n = 0    # Command number, for exactly-once semantics
     
 #     def run():
 #         for i in range(10):
