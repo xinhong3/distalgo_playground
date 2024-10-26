@@ -108,9 +108,8 @@ TIMEOUT = 5
 def matchingQC(mtype, viewNum, qc):
     return qc[0] == mtype and qc[1] == viewNum
 
-
-    def anyof(s):
-        return next(iter(s)) if s else None
+def anyof(s):
+    return next(iter(s)) if s else None
 
 # Combine partial signatures into QC = (mtype, mview, mnode, m)
 def combine_signature():

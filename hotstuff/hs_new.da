@@ -3,6 +3,7 @@ import random
 import sys
 import logging
 import time
+import threading
 
 # Change log level to DEBUG
 logging.basicConfig(level = logging.INFO)
@@ -137,171 +138,250 @@ Message = namedtuple('Message', ['type', 'viewNumber', 'node', 'justify', 'parti
 # [Algorithm 1] Line 15 - 20
 Justify = namedtuple('Justify', ['type', 'viewNumber', 'node', 'sig'])
 
-# Utility function from paper
-def matchingMsg(m, t, v):
-    if isinstance(m, Message):
-        return m.type == t and m.viewNumber == v
-    else:
-        try:
-            _m = Message._make(m)
-            return _m.type == t and _m.viewNumber == v
-        except TypeError:
-            return False
-
-# Utility function from paper
-def matchingQC(qc, t, v):
-    if isinstance(qc, Justify):
-        return qc.type == t and qc.viewNumber == v
-    else:
-        try:
-            _qc = Justify._make(qc)
-            return _qc.type == t and _qc.viewNumber == v
-        except TypeError:
-            return False
-
-# MODIFIED from the paper (It is node.extend in the paper)
-def list_extends(l1, l2):
-    '''Check if l1 extends l2, works for frozen list as well'''
-    if l2 == None:
-        return True
-    elif l1 == None:
-        return False
-    return list(l1)[:len(l2)] == list(l2)
-
 class Replica(process):
     def setup(replicas: set, client: set, f: int, nextViewTimeout: float):        
         # 4.2 - Bookkeeping variables
         self.curView = 0
         self.prepareQC = None
         self.lockedQC = None
-        self.blocks = list()  # Not explicitly defined in the paper
-        self.replicas = frozenset(replicas)  # Set of replicas
+        
+        # [Differ from paper] Use list of nodes instead of blockchain
+        self.blocks = list()
 
         # Not explicitly defined in the paper
         self.n = len(replicas)   # Number of replicas
         self.replica_index = {i: add for i, add in enumerate(sorted(list(replicas)))}    # Index of replicas -- used in leader rotation
         self.pid = sorted(list(replicas)).index(self)
-        self.cmd = None
+        
+        self.cmd = None # TODO: Not used
     
     def run():
         broadcast(Message('NEW-VIEW', 0, None, self.prepareQC))          # Special new-view messages from view 0
 
-        while True:         # For curView <- 1, 2, 3, . . . do
+        while True:         # [Paper] For curView <- 1, 2, 3, . . . do
             curView += 1
-            if await(leader_role() if is_leader() else replica_role()):
-                pass
-            elif timeout(nextViewTimeout):
-                pass
 
+            # [DEBUG]
+            output(f'[{pid}] Current view: {int(curView)}')
+            
+            threads = [threading.Thread(target = perform_leader, daemon = True), 
+                        threading.Thread(target = perform_replica, daemon = True)]
+
+            for t in threads:
+                t.start()
+            for t in threads:
+                t.join(nextViewTimeout)
+            
+            # [Paper] Line 35 - Go to this line if nextViewTimeout is triggered
             nextView()
 
-            # [not in paper] sleep for a bit in between every view
+            # [NOT IN PAPER] sleep for a bit in between every view
             time.sleep(2)
 
-    def leader_role():
+    # ---------------------------------------- [Paper] Algorithm 2 ----------------------------------------
+    def perform_leader():
+        ''' Leader thread function '''
+
+        if not is_leader():
+            return
+
         output(f'[{pid}] Enter leader role, view: {int(curView)}')
 
-        # PREPARE PHASE
-        await(len(setof((m, p), received(m, from_ = p), matchingMsg(m, 'NEW-VIEW', curView - 1))) >= n - f)
+        # [Paper] PREPARE PHASE
+        # [Paper] Line 3
+        await(len(setof((m, p), received(m, from_ = p), matchingMsg(m, 'NEW-VIEW', curView - 1))) >= n - f) # Here we count the process-message pair to count for duplicates
         
-        M = setof(m, received(m), matchingMsg(m, 'NEW-VIEW', curView - 1))  # [DEBUG]
-        output(f'[{pid}] Messages collected: {M}')                                          # [DEBUG]
+        # [DEBUG]
+        M = setof(m, received(m), matchingMsg(m, 'NEW-VIEW', curView - 1))
+        output(f'[{pid}] Messages collected: {M}')
 
-        # highQC = anyof(
-        #     setof(m in {m for m, _ in M}, m.justify.viewNumber == max(setof(m1.justify.viewNumber, (m1, _) in M, m1.justify != None)))
-        # ) if not each((m, p) in M, has = m.justify == None) else None
-
+        # [Paper] Line 4 - Calculate highQC
         highQC = to_unfrozen_justify(anyof(
             setof(m.justify, m in M, m.justify.viewNumber == max(setof(m1.justify.viewNumber, m1 in M, m1.justify != None)))         
         )) if some(m in M, has = m.justify != None) else None
 
-        output(f'[{pid}] HighQC: {highQC}')  # [DEBUG]
+        # [DEBUG]
+        output(f'[{pid}] HighQC: {highQC}')
 
-        curProposal = createLeaf(highQC.node if highQC is not None else list(), random.randint(0, 100))  # Line 5
+        # [Paper] Line 5
+        curProposal = createLeaf(highQC.node if highQC is not None else list(), random.randint(0, 100))     # TODO: Client is omitted. Leader just sends random commands for now.
         
-        output(f'[{pid}] Current proposal: {curProposal}')  # [DEBUG]
+        # [DEBUG]
+        output(f'[{pid}] Current proposal: {curProposal}')
 
+        # [Paper] Line 6
         broadcast(Msg('PREPARE', curProposal, highQC))
 
         # PRE-COMMIT PHASE
-        await(len(setof((vote, p), received(vote, from_ = p), matchingMsg(vote, 'PREPARE', curView))) >= n - f)
-        output(f'Messgae received: {setof((vote, p), received(vote, from_ = p), matchingMsg(vote, "PREPARE", curView))}')  # [DEBUG]
-        output(f'[{pid}] Received PREPARE messages.')  # [DEBUG]
+        
+        # [Paper] Line 10
+        await(len(setof((vote, p), received(vote, from_ = p), matchingMsg(vote, 'PREPARE', curView) and vote.partialSig != None)) >= n - f)
 
-        prepareQC = QC(setof(m, received(m), matchingMsg(m, 'PREPARE', curView)))                         # TODO: QC function implementation
-        #send((Msg('PRE-COMMIT', None, prepareQC)), to = replicas)
+        # [DEBUG]
+        output(f'Messgae received: {setof((vote, p), received(vote, from_ = p), matchingMsg(vote, "PREPARE", curView) and vote.partialSig != None)}')
+        output(f'[{pid}] Received PREPARE messages.')
+
+        # [Paper] Line 13 - Calculate prepareQC
+        prepareQC = QC(setof(m, received(m), matchingMsg(m, 'PREPARE', curView) and m.partialSig != None))
+
+        # [Paper] Line 14
         broadcast(Msg('PRE-COMMIT', None, prepareQC))
 
-        # COMMIT PHASE
-        await(len(setof(p, received(vote, from_ = p), matchingMsg(vote, 'PRE-COMMIT', curView))) >= n - f)
-        output(f'lp2')
-        output(f'Message received: {setof(p, received(vote, from_ = p), matchingMsg(vote, "PRE-COMMIT", curView))}')  # [DEBUG]
-        precommitQC = QC(setof(m, received(m), matchingMsg(m, 'PRE-COMMIT', curView)))
+        # [Paper] COMMIT PHASE
+        await(len(setof(p, received(vote, from_ = p), matchingMsg(vote, 'PRE-COMMIT', curView) and vote.partialSig != None)) >= n - f)
+
+        # [DEBUG]
+        output(f'Message received: {setof(p, received(vote, from_ = p), matchingMsg(vote, "PRE-COMMIT", curView) and vote.partialSig != None)}')  
+
+        # [Paper] Line 20
+        precommitQC = QC(setof(m, received(m), matchingMsg(m, 'PRE-COMMIT', curView) and m.partialSig != None))
+        # [Paper] Line 21
         broadcast(Msg('COMMIT', None, precommitQC))
 
-        # DECIDE PHASE
-        await(len(setof(p, received(vote, from_ = p), matchingMsg(vote, 'COMMIT', curView))) >= n - f)
-        output(f'lp3')
-        output(f'Message received: {setof(p, received(vote, from_ = p), matchingMsg(vote, "COMMIT", curView))}')  # [DEBUG]
-        commitQC = QC(setof(m, received(m), matchingMsg(m, 'COMMIT', curView)))
+        # [Paper] DECIDE PHASE
+        # [Paper] Line 28
+        await(len(setof(p, received(vote, from_ = p), matchingMsg(vote, 'COMMIT', curView) and vote.partialSig != None)) >= n - f)
+
+        # [DEBUG]
+        output(f'Message received: {setof(p, received(vote, from_ = p), matchingMsg(vote, "COMMIT", curView) and vote.partialSig != None)}')
+
+        # [Paper] Line 29 - 30
+        commitQC = QC(setof(m, received(m), matchingMsg(m, 'COMMIT', curView) and m.partialSig != None))
         broadcast(Msg('DECIDE', None, commitQC))
-        
-        return True
     
-    def to_unfrozen_justify(qc):
-        ''' NOT related to the paper.
-            Transform every frozen obj to normal obj in the qc.
-            Just to mitigate lost messages due to unpicklable frozen objects.
-        '''
-        return Justify(qc.type, qc.viewNumber, list(qc.node) if qc.node != None else None, set(qc.sig) if qc.sig != None else None)
-    
-    def replica_role():
+    def perform_replica():
         output(f'[{pid}] Enter replica role, view: {int(curView)}')
         leader_p = get_leader(curView)  # Leader of the current view
         
-        # PREPARE PHASE
-        await(some(received(m, from_ = leader_p), has = matchingMsg(m, 'PREPARE', curView)))     # Line 8
+        # [Paper] PREPARE PHASE
+        # [Paper] Line 8: wait for message m : matchingMsg(m, prepare, curView) from leader(curView)
+        await(some(received(m, from_ = leader_p), has = matchingMsg(m, 'PREPARE', curView)))
         
-        # Line 9 - 10
+        # Get m.mode and m.justify for line 9. What if m.node is not unique?
         (mnode, mjustify) = anyof(setof((m.node, m.justify), received(m, from_ = leader_p), matchingMsg(m, 'PREPARE', curView)))
 
-        output(f'[{pid}] Received message: {mnode}, {mjustify}')  # [DEBUG]
+        # [DEBUG]
+        output(f'[{pid}] Received message: {mnode}, {mjustify}')
 
-        # What if mjustify is None?
-        if list_extends(mnode, mjustify.node if mjustify is not None else None) and safeNode(mnode, mjustify.node if mjustify is not None else None): # Line 9
-            send(voteMsg('PREPARE', list(mnode), None), to = leader_p) # Line 10, need to wrap frozenlist with list so it can be unpickeled
-            output(f'[{pid}] Sent vote message to leader {leader_p}.')  # [DEBUG]
+        # [Paper] Line 9
+        if list_extends(mnode, mjustify.node if mjustify is not None else None) and safeNode(mnode, mjustify.node if mjustify is not None else None):
+            # [Paper] Line 10
+            send(voteMsg('PREPARE', list(mnode), None), to = leader_p) # need to wrap frozenlist with list so it can be unpickeled
+            # [DEBUG]
+            output(f'[{pid}] Sent vote message to leader {leader_p}.')
 
-        # PRE-COMMIT PHASE
-        await(some(received(m, from_ = leader_p), has = matchingQC(m.justify, 'PREPARE', curView))) # Line 16
+        # [Paper] PRE-COMMIT PHASE
+
+        # [Paper] Line 16
+        await(some(received(m, from_ = leader_p), has = matchingQC(m.justify, 'PREPARE', curView)))
+
+        # [DEBUG]
         s = setof(m.justify, received(m, from_ = leader_p), matchingQC(m.justify, 'PREPARE', curView))
-        output(f'[{pid}] Received PREPARE message = {s}.')  # [DEBUG]
-        prepareQC = to_unfrozen_justify(anyof(setof(m.justify, received(m, from_ = leader_p), matchingQC(m.justify, 'PREPARE', curView))))
-        send(voteMsg('PRE-COMMIT', prepareQC.node, None), to = leader_p) # Line 17
-
-        # COMMIT PHASE
-        await(some(received(m, from_ = leader_p), has = matchingQC(m.justify, 'PRE-COMMIT', curView))) # Line 24
-        lockedQC = to_unfrozen_justify(anyof(setof(m.justify, received(m, from_ = leader_p), matchingQC(m.justify, 'PRE-COMMIT', curView))))
-        send(voteMsg('COMMIT', lockedQC.node, None), to = leader_p) # Line 25
+        output(f'[{pid}] Received PREPARE message = {s}.')
         
-        # DECIDE PHASE
-        # Line 32: wait for message m form leader(curView)?
-        await(some(received(m, from_ = leader_p), has = matchingQC(m.justify, 'COMMIT', curView))) # Line 33
+        # [Paper] Line 17
+        prepareQC = to_unfrozen_justify(anyof(setof(m.justify, received(m, from_ = leader_p), matchingQC(m.justify, 'PREPARE', curView) and m.justify.sig != None))) # to verify sig is not None to filter out leader PREPARE msg (there's leader prepare and replica prepare, and they both match)
+
+        # [Paper] Line 18
+        send(voteMsg('PRE-COMMIT', prepareQC.node, None), to = leader_p)
+
+        # [Paper] COMMIT PHASE
+
+        # [Paper] Line 24
+        await(some(received(m, from_ = leader_p), has = matchingQC(m.justify, 'PRE-COMMIT', curView)))
+        
+        # [Paper] Line 25
+        lockedQC = to_unfrozen_justify(anyof(setof(m.justify, received(m, from_ = leader_p), matchingQC(m.justify, 'PRE-COMMIT', curView) and m.justify.sig != None)))
+
+        # [Paper] Line 26
+        send(voteMsg('COMMIT', lockedQC.node, None), to = leader_p)
+        
+        # [Paper] DECIDE PHASE
+        
+        # [Paper] What is Line 32 doing? Not clear from the paper
+
+        # [Paper] Line 33
+        await(some(received(m, from_ = leader_p), has = matchingQC(m.justify, 'COMMIT', curView)))
+
+        # [Paper] Line 34
         execute(anyof(setof(m.justify, received(m, from_ = leader_p), matchingQC(m.justify, 'COMMIT', curView)))) # Line 34
 
-        output(f'[{pid}] prepareQC = {prepareQC}, lockedQC = {lockedQC}')  # [DEBUG]
-        
-        return True
+        # [DEBUG]
+        output(f'[{pid}] prepareQC = {prepareQC}, lockedQC = {lockedQC}')
     
-    # def receive(msg = ('COMMAND', command_n, command)):
-    #     output(f'Received command {command} from client.')
-    #     self.cmd = command
+    # ---------------------------------------- [Paper] Algorithm 1 ----------------------------------------
+
+    def Msg(mtype, node, qc):
+        return Message(mtype, curView, list(node) if node != None else None, qc)
+
+    def voteMsg(mtype, node, qc):
+        m = Msg(mtype, list(node) if node else None, qc)
+        m = m._replace(partialSig=tsign((m.type, m.viewNumber, m.node)))
+        output(f'Vote message: {m}') # [DEBUG]
+        return m
+    
+    # MODIFIED from the paper
+    def createLeaf(parent, cmd):
+        parent = list(parent)
+        parent.append(cmd)
+        return parent
+
+    def QC(V):
+        ''' [Modified from paper] Returns the QC given a setof vote messages in V '''
+        m = anyof(V)
+        if m == None:
+            return None
+        justify = Justify(m.type, m.viewNumber, list(m.node) if m.node != None else None, tcombine((m.type, m.viewNumber, m.node), {m.partialSig for m in V}))
+        # [DEBUG]
+        output(f'QC: {justify}')
+        return justify
+
+    @staticmethod
+    def matchingMsg(m, t, v):
+        if isinstance(m, Message):
+            return m.type == t and m.viewNumber == v
+        else:
+            try:
+                _m = Message._make(m)
+                return _m.type == t and _m.viewNumber == v
+            except TypeError:
+                return False
+
+    @staticmethod
+    def matchingQC(qc, t, v):
+        if isinstance(qc, Justify):
+            return qc.type == t and qc.viewNumber == v
+        else:
+            try:
+                _qc = Justify._make(qc)
+                return _qc.type == t and _qc.viewNumber == v
+            except TypeError:
+                # Both Message and Justify can be passed, TypeError is raised when Message is passed. In this case return False
+                return False
+    
+    def safeNode(node, qc):
+        return (list_extends(node, None if self.lockedQC == None else self.lockedQC.node) or qc.viewNumber > self.lockedQC.viewNumber)
+
+    # ---------------------------------------- Not explicitly defined in the paper ----------------------------------------
+
+    # MODIFIED from the paper (It is node.extend in the paper)
+    def list_extends(l1, l2):
+        '''Check if l1 extends l2, works for frozen list as well'''
+        if l2 == None:
+            return True
+        elif l1 == None:
+            return False
+        return list(l1)[:len(l2)] == list(l2)
 
     def execute(qc):
-        output(f'Executing command {qc.node}.')
-        # TODO: impl
+        ''' Dummy execute function that prints the command for now '''
+        output(f'received command {qc.node}.')
+        cur_command = [v for i, v in enumerate(qc.node) if i >= len(self.blocks)]
+        output(f'Executing command {cur_command}.')
+        self.blocks.extend(cur_command)
 
     def get_leader(viewNumber):
+        ''' Return leader for the given view number '''
         return replica_index[viewNumber % n]
     
     def is_leader():
@@ -314,50 +394,26 @@ class Replica(process):
     def nextView():
         # [Paper] goto this line if nextView(curView) is called during “wait for” in any phase
         output(f'Sending NEW-VIEW message: {Msg("NEW-VIEW", None, prepareQC)} to leader {get_leader(curView + 1)}')
+        # [Paper] Line 36
         send(Msg('NEW-VIEW', None, prepareQC), to = get_leader(curView + 1))
-    
-    # MODIFIED from the paper
-    def createLeaf(parent, cmd):
-        parent = list(parent)
-        parent.append(cmd)
-        return parent
-
-    def voteMsg(mtype, node, qc):
-        m = Msg(mtype, list(node) if node else None, qc)
-        m = m._replace(partialSig=tsign((m.type, m.viewNumber, m.node)))
-        output(f'Vote message: {m}') # [DEBUG]
-        return m
-    
-    def Msg(mtype, node, qc):
-        return Message(mtype, curView, list(node) if node != None else None, qc)
-    
-    # Not explicitly defined in the paper
+  
     def tsign(m):
         ''' Dummy function, only gives pid. TODO: use a real threshold signature lib '''
-        output(f'Signing message {m}')  # [DEBUG]
+        # [DEBUG]
+        output(f'Signing message {m}')
         return pid
-    
-    def safeNode(node, qc):     # Line 25 - 27
-        return (list_extends(node, None if self.lockedQC == None else self.lockedQC.node) or qc.viewNumber > self.lockedQC.viewNumber)
-    
-    def QC(V):
-        '''Returns the QC given a setof vote messages in V'''
-        m = anyof(V)
-        if m == None:
-            return None
-        justify = Justify(m.type, m.viewNumber, list(m.node) if m.node != None else None, tcombine((m.type, m.viewNumber, m.node), {m.partialSig for m in V}))
-        output(f'QC: {justify}')  # [DEBUG]
-        return justify
 
-    # Utility functions (from paper)
-    # Not explicitly defined in the paper
     def tcombine(m, s: set):
-        '''Dummy signature combine function.
-        Args:
-            m: message
-            s: set of partial signatures
-        '''
+        '''Dummy signature combine function.'''
         return set(s)
+
+    # ---------------------------------------- Distalgo specific ----------------------------------------
+    def to_unfrozen_justify(qc):
+        ''' NOT related to the paper.
+            Transform every frozen obj to normal obj in the qc.
+            Just to mitigate lost messages due to unpicklable frozen objects.
+        '''
+        return Justify(qc.type, qc.viewNumber, list(qc.node) if qc.node != None else None, set(qc.sig) if qc.sig != None else None)
 
 '''
 Client implementation is omitted from the paper. However, it does mention the following:
